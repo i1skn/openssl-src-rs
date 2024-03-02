@@ -1,10 +1,11 @@
 [package]
 name = "openssl-src"
-version = "300.0.4+3.0.1"
+version = "300.2.3+3.2.1"
 authors = ["Alex Crichton <alex@alexcrichton.com>"]
 license = "MIT/Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/alexcrichton/openssl-src-rs"
+edition = "2021"
 description = """
 Source of OpenSSL and logic to build it.
 """
@@ -17,6 +18,15 @@ exclude = [
   'openssl/test/recipes/*',
   'openssl/gost-engine/*',
   'openssl/demos/*',
+  'openssl/tlslite-ng/*',
+  'openssl/tlsfuzzer/*',
+  'openssl/python-ecdsa/*',
+  'openssl/oqs-provider/*',
+  'openssl/cloudflare-quiche/*',
+  'openssl/tlslite-ng/*',
+# The current upload size limit for *.crate files is 10MB. Therefore, exclude
+# some unused documentation to meet this constraint.
+  'openssl/doc/man{3,5,7}',
 ]
 
 [features]
@@ -36,10 +46,12 @@ idea = []
 # Enables compilation of SEED, a symmetric key block cypher mostly used in South Korea, but
 # otherwise not widely supported.
 seed = []
+# Forces configuring Engine module support.
+force-engine = []
 
 [workspace]
 members = ['testcrate']
 exclude = ['target']
 
 [dependencies]
-cc = "1.0"
+cc = "1.0.79"
