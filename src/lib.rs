@@ -1,6 +1,7 @@
 extern crate cc;
 
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -135,10 +136,21 @@ impl Build {
             env::var("OPENSSL_SRC_PERL").unwrap_or(env::var("PERL").unwrap_or("perl".to_string()));
         let mut configure = Command::new(perl_program);
         configure.arg("./Configure");
+
+        // Change the install directory to happen inside of the build directory.
         if host.contains("pc-windows-gnu") {
             configure.arg(&format!("--prefix={}", sanitize_sh(&install_dir)));
         } else {
             configure.arg(&format!("--prefix={}", install_dir.display()));
+        }
+
+        // Specify that openssl directory where things are loaded at runtime is
+        // not inside our build directory. Instead this should be located in the
+        // default locations of the OpenSSL build scripts.
+        if target.contains("windows") {
+            configure.arg("--openssldir=SYS$MANAGER:[OPENSSL]");
+        } else {
+            configure.arg("--openssldir=/usr/local/ssl");
         }
 
         configure
@@ -154,7 +166,12 @@ impl Build {
             .arg("no-zlib")
             .arg("no-zlib-dynamic");
 
-        if cfg!(not(feature = "weak-crypto")) {
+        if cfg!(feature = "weak-crypto") {
+            configure
+                .arg("enable-md2")
+                .arg("enable-rc5")
+                .arg("enable-weak-ssl-ciphers");
+        } else {
             configure
                 .arg("no-md2")
                 .arg("no-rc5")
@@ -174,10 +191,13 @@ impl Build {
         }
 
         if target.contains("musl") || target.contains("windows") {
-            // This actually fails to compile on musl (it needs linux/version.h
+            // Engine module fails to compile on musl (it needs linux/version.h
             // right now) but we don't actually need this most of the time.
             // API of engine.c ld fail in Windows.
-            configure.arg("no-engine");
+            // Disable engine module unless force-engine feature specified
+            if !cfg!(feature = "force-engine") {
+                configure.arg("no-engine");
+            }
         }
 
         if target.contains("musl") {
@@ -244,6 +264,7 @@ impl Build {
             "i686-unknown-freebsd" => "BSD-x86-elf",
             "i686-unknown-linux-gnu" => "linux-elf",
             "i686-unknown-linux-musl" => "linux-elf",
+            "loongarch64-unknown-linux-gnu" => "linux-generic64",
             "mips-unknown-linux-gnu" => "linux-mips32",
             "mips-unknown-linux-musl" => "linux-mips32",
             "mips64-unknown-linux-gnuabi64" => "linux64-mips64",
@@ -254,6 +275,7 @@ impl Build {
             "mipsel-unknown-linux-musl" => "linux-mips32",
             "powerpc-unknown-freebsd" => "BSD-generic32",
             "powerpc-unknown-linux-gnu" => "linux-ppc",
+            "powerpc-unknown-linux-gnuspe" => "linux-ppc",
             "powerpc64-unknown-freebsd" => "BSD-generic64",
             "powerpc64-unknown-linux-gnu" => "linux-ppc64",
             "powerpc64-unknown-linux-musl" => "linux-ppc64",
@@ -303,18 +325,22 @@ impl Build {
             // prefix, we unset `CROSS_COMPILE` for `./Configure`.
             configure.env_remove("CROSS_COMPILE");
 
-            // Infer ar/ranlib tools from cross compilers if the it looks like
-            // we're doing something like `foo-gcc` route that to `foo-ranlib`
-            // as well.
-            if path.ends_with("-gcc") && !target.contains("unknown-linux-musl") {
-                let path = &path[..path.len() - 4];
-                if env::var_os("RANLIB").is_none() {
-                    configure.env("RANLIB", format!("{}-ranlib", path));
-                }
-                if env::var_os("AR").is_none() {
-                    configure.env("AR", format!("{}-ar", path));
-                }
+            let ar = cc.get_archiver();
+            configure.env("AR", ar.get_program());
+            if ar.get_args().count() != 0 {
+                // On some platforms (like emscripten on windows), the ar to use may not be a
+                // single binary, but instead a multi-argument command like `cmd /c emar.bar`.
+                // We can't convey that through `AR` alone, and so also need to set ARFLAGS.
+                configure.env(
+                    "ARFLAGS",
+                    ar.get_args().collect::<Vec<_>>().join(OsStr::new(" ")),
+                );
             }
+            let ranlib = cc.get_ranlib();
+            // OpenSSL does not support RANLIBFLAGS. Jam the flags in RANLIB.
+            let mut args = vec![ranlib.get_program()];
+            args.extend(ranlib.get_args());
+            configure.env("RANLIB", args.join(OsStr::new(" ")));
 
             // Make sure we pass extra flags like `-ffunction-sections` and
             // other things like ARM codegen flags.
